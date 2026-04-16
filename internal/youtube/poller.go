@@ -65,6 +65,7 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 
 	continuation := state.Continuation
 	apiKey := state.APIKey
+	seenIDs := make(map[string]bool) // Deduplicate across poll cycles
 
 	m.hub.Broadcast(target, map[string]any{
 		"type":    "system",
@@ -91,10 +92,22 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 			if action.AddChatItemAction != nil {
 				jsonMsg := m.normalizeAction(action.AddChatItemAction)
 				if jsonMsg != nil {
+					msgId, _ := jsonMsg["id"].(string)
+					if msgId != "" && seenIDs[msgId] {
+						continue // Already sent this message
+					}
+					if msgId != "" {
+						seenIDs[msgId] = true
+					}
 					jsonMsg["platform"] = "youtube"
 					m.hub.Broadcast(target, jsonMsg)
 				}
 			}
+		}
+
+		// Cap seenIDs to prevent unbounded growth on very long streams
+		if len(seenIDs) > 5000 {
+			seenIDs = make(map[string]bool)
 		}
 
 		conts := resp.ContinuationContents.LiveChatContinuation.Continuations

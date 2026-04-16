@@ -3,6 +3,7 @@ package hub
 import (
 	"log/slog"
 	"sync"
+	"time"
 )
 
 type Hub struct {
@@ -11,6 +12,7 @@ type Hub struct {
 	subsRegistry map[string]map[*Client]bool // target -> clients
 	startPoller  func(target string)
 	stopPoller   func(target string)
+	graceTimers  map[string]*time.Timer // grace period before stopping poller
 }
 
 func New(startFn, stopFn func(string)) *Hub {
@@ -19,6 +21,7 @@ func New(startFn, stopFn func(string)) *Hub {
 		subsRegistry: make(map[string]map[*Client]bool),
 		startPoller:  startFn,
 		stopPoller:   stopFn,
+		graceTimers:  make(map[string]*time.Timer),
 	}
 }
 
@@ -38,10 +41,26 @@ func (h *Hub) RemoveClient(c *Client) {
 			delete(clients, c)
 			if len(clients) == 0 {
 				delete(h.subsRegistry, target)
-				slog.Info("no more clients for target", "target", target)
-				if h.stopPoller != nil {
-					h.stopPoller(target)
-				}
+				slog.Info("no more clients for target, starting 30s grace period", "target", target)
+
+				// Start a grace timer instead of stopping immediately
+				t := time.AfterFunc(30*time.Second, func() {
+					h.mu.Lock()
+					defer h.mu.Unlock()
+
+					// Only stop if nobody reconnected during grace period
+					if h.subsRegistry[target] == nil || len(h.subsRegistry[target]) == 0 {
+						slog.Info("grace period expired, stopping poller", "target", target)
+						delete(h.graceTimers, target)
+						if h.stopPoller != nil {
+							h.stopPoller(target)
+						}
+					} else {
+						slog.Info("client reconnected during grace period, keeping poller", "target", target)
+						delete(h.graceTimers, target)
+					}
+				})
+				h.graceTimers[target] = t
 			}
 		}
 	}
@@ -50,6 +69,13 @@ func (h *Hub) RemoveClient(c *Client) {
 func (h *Hub) Subscribe(c *Client, target string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Cancel any pending grace timer for this target
+	if t, ok := h.graceTimers[target]; ok {
+		t.Stop()
+		delete(h.graceTimers, target)
+		slog.Info("cancelled grace timer, client reconnected", "target", target)
+	}
 
 	if h.subsRegistry[target] == nil {
 		h.subsRegistry[target] = make(map[*Client]bool)

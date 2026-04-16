@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"time"
 
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
@@ -30,11 +31,19 @@ func (c *Client) Send(m any) {
 }
 
 func (c *Client) WritePump(ctx context.Context) {
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
 	defer c.conn.Close(websocket.StatusGoingAway, "Server closed")
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-pingTicker.C:
+			err := c.conn.Ping(ctx)
+			if err != nil {
+				return
+			}
 		case msg, ok := <-c.send:
 			if !ok {
 				return
