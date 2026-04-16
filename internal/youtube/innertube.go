@@ -33,6 +33,11 @@ func (c *InnerTubeClient) ResolveTarget(ctx context.Context, target string) (*In
 	url := "https://www.youtube.com/watch?v=" + target
 	if strings.HasPrefix(target, "@") || strings.HasPrefix(target, "UC") {
 		url = "https://www.youtube.com/" + target + "/live"
+	} else {
+		isLowercaseHandle := len(target) == 11 && regexp.MustCompile(`^[a-z]+$`).MatchString(target)
+		if len(target) != 11 || isLowercaseHandle {
+			url = "https://www.youtube.com/@" + target + "/live"
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -98,9 +99,18 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 
 		conts := resp.ContinuationContents.LiveChatContinuation.Continuations
 		timeoutMs := 3000
-		if len(conts) > 0 && conts[0].TimedContinuationData != nil {
-			continuation = conts[0].TimedContinuationData.Continuation
-			timeoutMs = conts[0].TimedContinuationData.TimeoutMs
+		if len(conts) > 0 {
+			if conts[0].TimedContinuationData != nil {
+				continuation = conts[0].TimedContinuationData.Continuation
+				if conts[0].TimedContinuationData.TimeoutMs > 0 {
+					timeoutMs = conts[0].TimedContinuationData.TimeoutMs
+				}
+			} else if conts[0].InvalidationContinuationData != nil {
+				continuation = conts[0].InvalidationContinuationData.Continuation
+				if conts[0].InvalidationContinuationData.TimeoutMs > 0 {
+					timeoutMs = conts[0].InvalidationContinuationData.TimeoutMs
+				}
+			}
 		}
 
 		select {
@@ -151,22 +161,24 @@ func (m *PollerManager) normalizeAction(action *AddChatItemAction) map[string]an
 		}
 	}
 
-    tags := map[string]any{
-        "badges": []map[string]string{},
-    }
+    tags := map[string]any{}
+    var badgeList []string
+    
     // Simplistic mapping for standard badges
     for _, b := range r.AuthorBadges {
         if b.LiveChatAuthorBadgeRenderer.Icon != nil {
             val := b.LiveChatAuthorBadgeRenderer.Icon.IconType
-            badgeId := "verified"
-            if val == "OWNER" { badgeId = "broadcaster" }
-            if val == "MODERATOR" { badgeId = "moderator" }
-            // push to array
+            badgeId := "verified/1"
+            if val == "OWNER" { badgeId = "broadcaster/1" }
+            if val == "MODERATOR" { badgeId = "moderator/1" }
             if val != "" {
-                badges := tags["badges"].([]map[string]string)
-                tags["badges"] = append(badges, map[string]string{"id": badgeId})
+                badgeList = append(badgeList, badgeId)
             }
         }
+    }
+    
+    if len(badgeList) > 0 {
+        tags["badges"] = strings.Join(badgeList, ",")
     }
 
     // Prepare rich data

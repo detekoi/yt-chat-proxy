@@ -13,6 +13,10 @@ type LiveChatResponse struct {
 					TimeoutMs    int    `json:"timeoutMs"`
 					Continuation string `json:"continuation"`
 				} `json:"timedContinuationData,omitempty"`
+				InvalidationContinuationData *struct {
+					TimeoutMs    int    `json:"timeoutMs"`
+					Continuation string `json:"continuation"`
+				} `json:"invalidationContinuationData,omitempty"`
 			} `json:"continuations"`
 			Actions []Action `json:"actions"`
 		} `json:"liveChatContinuation"`
