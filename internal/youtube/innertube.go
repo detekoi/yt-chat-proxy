@@ -28,18 +28,6 @@ func NewClient() *InnerTubeClient {
 	}
 }
 
-// setStandardHeaders adds browser-like headers and the SOCS consent cookie
-// to bypass YouTube's cookie consent wall on data-center IPs, which is also useful for get_live_chat.
-func setStandardHeaders(req *http.Request) {
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	// SOCS cookie signals consent acceptance — prevents the consent interstitial
-	req.AddCookie(&http.Cookie{Name: "SOCS", Value: "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMxMTE0LjA3X3AxGgJlbiACGgYIgJnsBhAB"})
-	// CONSENT cookie as additional fallback
-	req.AddCookie(&http.Cookie{Name: "CONSENT", Value: "PENDING+987"})
-}
-
 // buildLiveURL constructs the YouTube live page URL for a given target.
 func buildLiveURL(target string) string {
 	if strings.HasPrefix(target, "@") || strings.HasPrefix(target, "UC") {
@@ -284,12 +272,7 @@ func (c *InnerTubeClient) GetLiveChat(ctx context.Context, apiKey, continuation 
 	}
 
 	payload := map[string]any{
-		"context": map[string]any{
-			"client": map[string]string{
-				"clientName":    "WEB",
-				"clientVersion": "2.20240101.00.00",
-			},
-		},
+		"context":      c.innertubeContext(),
 		"continuation": continuation,
 	}
 
@@ -299,7 +282,6 @@ func (c *InnerTubeClient) GetLiveChat(ctx context.Context, apiKey, continuation 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setStandardHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
