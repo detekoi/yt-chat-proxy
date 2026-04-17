@@ -1,6 +1,6 @@
 # YouTube Chat Proxy (`yt-chat-proxy`)
 
-A lightweight, stateless Go-based WebSocket proxy server that bridges live YouTube chat messages (via the InnerTube API) to connected browser clients. It was specifically built as the bridging backend for the `wildcat-home` chat overlay.
+A lightweight, stateless Go-based WebSocket proxy server that bridges live YouTube chat messages (via the InnerTube API) to connected browser clients. It was specifically built as the bridging backend for the [`wildcat-home`](https://github.com/detekoi/wildcat-home) chat overlay (live at [wildcat.chat/chat-overlay](https://wildcat.chat/chat-overlay/)).
 
 ## Features
 - **Idempotent WebSocket Hub**: Multiple browser/OBS instances can connect to the same stream Target simultaneously. The server handles multiplexing so that only *one* outgoing polling loop is active per YouTube channel, minimizing API footprint.
