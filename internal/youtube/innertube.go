@@ -40,63 +40,6 @@ func buildLiveURL(target string) string {
 	return "https://www.youtube.com/watch?v=" + target
 }
 
-type resolveUrlResponse struct {
-	Endpoint struct {
-		WatchEndpoint struct {
-			VideoId string `json:"videoId"`
-		} `json:"watchEndpoint"`
-		BrowseEndpoint struct {
-			BrowseId string `json:"browseId"`
-			Params   string `json:"params"`
-		} `json:"browseEndpoint"`
-	} `json:"endpoint"`
-}
-
-type browseResponse struct {
-	Contents struct {
-		TwoColumnBrowseResultsRenderer struct {
-			Tabs []struct {
-				TabRenderer struct {
-					Content struct {
-						RichGridRenderer struct {
-							Contents []struct {
-								RichItemRenderer struct {
-									Content struct {
-										VideoRenderer struct {
-											VideoId            string `json:"videoId"`
-											ThumbnailOverlays []struct {
-												ThumbnailOverlayTimeStatusRenderer struct {
-													Style string `json:"style"`
-												} `json:"thumbnailOverlayTimeStatusRenderer"`
-											} `json:"thumbnailOverlays"`
-										} `json:"videoRenderer"`
-									} `json:"content"`
-								} `json:"richItemRenderer"`
-							} `json:"contents"`
-						} `json:"richGridRenderer"`
-					} `json:"content"`
-				} `json:"tabRenderer"`
-			} `json:"tabs"`
-		} `json:"twoColumnBrowseResultsRenderer"`
-	} `json:"contents"`
-}
-
-type nextResponse struct {
-	Contents struct {
-		TwoColumnWatchNextResults struct {
-			ConversationBar struct {
-				LiveChatRenderer struct {
-					Continuations []struct {
-						ReloadContinuationData struct {
-							Continuation string `json:"continuation"`
-						} `json:"reloadContinuationData"`
-					} `json:"continuations"`
-				} `json:"liveChatRenderer"`
-			} `json:"conversationBar"`
-		} `json:"twoColumnWatchNextResults"`
-	} `json:"contents"`
-}
-
 func (c *InnerTubeClient) innertubeContext() map[string]any {
 	return map[string]any{
 		"client": map[string]string{
