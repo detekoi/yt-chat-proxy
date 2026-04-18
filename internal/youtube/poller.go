@@ -51,16 +51,45 @@ func (m *PollerManager) StopPoller(target string) {
 }
 
 func (m *PollerManager) runPoller(ctx context.Context, target string) {
-	slog.Info("poller resolving target", "target", target)
-	state, err := m.client.ResolveTarget(ctx, target)
-	if err != nil {
-		slog.Error("resolving target failed", "target", target, "err", err)
-		m.hub.Broadcast(target, map[string]any{
-			"type":    "system",
-			"message": "Error connecting to YouTube: " + err.Error(),
-		})
-		m.StopPoller(target)
-		return
+	const maxResolveRetries = 40      // 40 * 15s = 10 minutes of retrying
+	const resolveRetryInterval = 15 * time.Second
+
+	var state *InitialState
+	for attempt := 0; attempt <= maxResolveRetries; attempt++ {
+		slog.Info("poller resolving target", "target", target, "attempt", attempt)
+		var err error
+		state, err = m.client.ResolveTarget(ctx, target)
+		if err == nil {
+			break // Success
+		}
+
+		slog.Warn("resolving target failed, will retry", "target", target, "err", err, "attempt", attempt)
+
+		// On first failure, notify the client
+		if attempt == 0 {
+			m.hub.Broadcast(target, map[string]any{
+				"type":    "system",
+				"message": "Waiting for YouTube stream to go live...",
+			})
+		}
+
+		// If we've exhausted retries, give up
+		if attempt == maxResolveRetries {
+			slog.Error("giving up resolving target after max retries", "target", target)
+			m.hub.Broadcast(target, map[string]any{
+				"type":    "system",
+				"message": "Could not find a live stream. Please check the channel name and try again.",
+			})
+			m.StopPoller(target)
+			return
+		}
+
+		// Wait before retrying, but respect cancellation
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(resolveRetryInterval):
+		}
 	}
 
 	continuation := state.Continuation
@@ -69,6 +98,7 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 
 	m.hub.Broadcast(target, map[string]any{
 		"type":    "system",
+		"status":  "connected",
 		"message": "Connected to YouTube stream.",
 	})
 

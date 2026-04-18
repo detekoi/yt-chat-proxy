@@ -4,12 +4,13 @@ A lightweight, stateless Go-based WebSocket proxy server that bridges live YouTu
 
 ## Features
 - **Idempotent WebSocket Hub**: Multiple browser/OBS instances can connect to the same stream Target simultaneously. The server handles multiplexing so that only *one* outgoing polling loop is active per YouTube channel, minimizing API footprint.
+- **Pre-Stream Retry Logic**: The server features a 10-minute backoff retry mechanism upon connection. If a user loads the chat overlay *before* they actually click "Go Live" on YouTube, the proxy will silently keep checking every 15 seconds. Once the stream goes live, the UI updates to "Connected" automatically without requiring a manual browser refresh.
 - **Server-Side Deduplication**: Keeps track of `seenIds` to prevent the InnerTube API's "replay buffer" from flooding clients with historical messages on reconnects or page refreshes.
 - **Resilient Connection Lifecycle**: Features a 30-second teardown "grace period." If the chat overlay refreshes (e.g. via OBS reloading or switching scenes), the poller stream remains alive seamlessly instead of terminating and restarting from scratch.
 - **Continuous Keepalives**: Built-in server-side 30s `PING/PONG` logic strictly maintains the connection state through restrictive reverse proxies or cloud gateways.
 
 ## How it Works
-The frontend establishes a `/ws` WebSocket connection containing the YouTube channel ID or standard @handle query param (`?target=parfaitfair`). The server spins up an InnerTube poller that scrapes live streaming data, strips it of unnecessary metadata, and pushes real-time chat payload buffers to the subscribed WebSocket(s).
+The frontend establishes a `/ws` WebSocket connection. To target a stream, it sends a JSON `JOIN` action containing either the public `@handle` string (e.g., `@parfaitfair`) for public live events, or a direct 11-character video ID / URL for unlisted live events. The server spins up a native InnerTube API poller mapping to YouTube's internal `resolve_url` and `next` endpoints, dynamically locating the live broadcast and streaming localized JSON chat payloads directly to the WebSockets.
 
 ## Local Development
 
