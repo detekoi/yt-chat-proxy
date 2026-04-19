@@ -19,6 +19,7 @@ $GCLOUD_BIN run deploy $SERVICE_NAME \
   --image $IMAGE_TAG \
   --region $REGION \
   --platform managed \
-  --allow-unauthenticated
+  --allow-unauthenticated \
+  --timeout=3600
 
 echo "Deployment completed successfully!"
