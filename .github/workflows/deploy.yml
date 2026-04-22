@@ -43,7 +43,21 @@ jobs:
 
       - name: Build and Push Docker image
         run: |-
-          gcloud builds submit --tag ${{ env.ARTIFACT_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} --quiet
+          BUILD_ID=$(gcloud builds submit \
+            --tag ${{ env.ARTIFACT_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
+            --async --format='value(id)' --quiet)
+          echo "Waiting for build $BUILD_ID..."
+          while true; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --format='value(status)' --quiet)
+            echo "  Build status: $STATUS"
+            case "$STATUS" in
+              SUCCESS) echo "Build succeeded!"; break ;;
+              FAILURE|TIMEOUT|CANCELLED|INTERNAL_ERROR|EXPIRED)
+                echo "::error::Build failed with status: $STATUS"
+                exit 1 ;;
+            esac
+            sleep 10
+          done
 
       - name: Deploy to Cloud Run
         run: |-
