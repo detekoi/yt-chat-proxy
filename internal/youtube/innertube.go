@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -40,13 +41,23 @@ func buildLiveURL(target string) string {
 	return "https://www.youtube.com/watch?v=" + target
 }
 
+const clientVersion = "2.20260206.01.00"
+
 func (c *InnerTubeClient) innertubeContext() map[string]any {
 	return map[string]any{
 		"client": map[string]string{
 			"clientName":    "WEB",
-			"clientVersion": "2.20240101.00.00",
+			"clientVersion": clientVersion,
 		},
 	}
+}
+
+// setStandardHeaders adds browser-like headers required by YouTube to avoid 403 on datacenter IPs.
+func setStandardHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Origin", "https://www.youtube.com")
+	req.Header.Set("Referer", "https://www.youtube.com/")
 }
 
 func (c *InnerTubeClient) ResolveTarget(ctx context.Context, target string) (*InitialState, error) {
@@ -64,7 +75,7 @@ func (c *InnerTubeClient) ResolveTarget(ctx context.Context, target string) (*In
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	setStandardHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -127,7 +138,7 @@ func (c *InnerTubeClient) findLiveVideoFromBrowse(ctx context.Context, browseId,
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	setStandardHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -176,7 +187,7 @@ func (c *InnerTubeClient) getChatContinuation(ctx context.Context, videoId strin
 	if err != nil {
 		return nil, err
 	}
-	nreq.Header.Set("Content-Type", "application/json")
+	setStandardHeaders(nreq)
 
 	nresp, err := c.client.Do(nreq)
 	if err != nil {
@@ -224,7 +235,7 @@ func (c *InnerTubeClient) GetLiveChat(ctx context.Context, apiKey, continuation 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	setStandardHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -233,6 +244,8 @@ func (c *InnerTubeClient) GetLiveChat(ctx context.Context, apiKey, continuation 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		slog.Error("get_live_chat non-200", "status", resp.StatusCode, "body", string(bodySnippet))
 		return nil, fmt.Errorf("api returned %d", resp.StatusCode)
 	}
 
