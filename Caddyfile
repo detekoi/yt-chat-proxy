@@ -1,0 +1,3 @@
+ytchat.wildcat.chat {
+	reverse_proxy proxy:8080
+}

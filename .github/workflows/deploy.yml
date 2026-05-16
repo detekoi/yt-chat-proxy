@@ -1,4 +1,4 @@
-name: Deploy to Cloud Run
+name: Deploy to VPS
 
 on:
   push:
@@ -6,65 +6,22 @@ on:
       - main
 
 env:
-  SERVICE_NAME: yt-chat-proxy
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-  GCP_REGION: us-central1
-  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev
-  REPO_NAME: chat-theme-repo
-  IMAGE_NAME: yt-chat-proxy
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: 'read'
-      id-token: 'write'
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          version: 'latest'
-          project_id: ${{ env.GCP_PROJECT_ID }}
-
-      - name: Configure Docker
-        run: gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }} --quiet
-
-      - name: Build and Push Docker image
-        run: |-
-          BUILD_ID=$(gcloud builds submit \
-            --tag ${{ env.ARTIFACT_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
-            --async --format='value(id)' --quiet)
-          echo "Waiting for build $BUILD_ID..."
-          while true; do
-            STATUS=$(gcloud builds describe "$BUILD_ID" --format='value(status)' --quiet)
-            echo "  Build status: $STATUS"
-            case "$STATUS" in
-              SUCCESS) echo "Build succeeded!"; break ;;
-              FAILURE|TIMEOUT|CANCELLED|INTERNAL_ERROR|EXPIRED)
-                echo "::error::Build failed with status: $STATUS"
-                exit 1 ;;
-            esac
-            sleep 10
-          done
-
-      - name: Deploy to Cloud Run
-        run: |-
-          gcloud run deploy ${{ env.SERVICE_NAME }} \
-            --image ${{ env.ARTIFACT_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
-            --region ${{ env.GCP_REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --timeout=3600 \
-            --quiet
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /opt/yt-chat-proxy
+            git pull origin main
+            docker compose -f docker-compose.prod.yml build --no-cache
+            docker compose -f docker-compose.prod.yml up -d
+            docker image prune -f
