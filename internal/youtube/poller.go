@@ -192,11 +192,16 @@ func (m *PollerManager) normalizeAction(action *AddChatItemAction) map[string]an
 			messageStr += run.Text
 			currentIndex += len(run.Text) // simple length approximation
 		} else if run.Emoji != nil {
-			if len(run.Emoji.Image.Thumbnails) > 0 {
+			thumbCount := len(run.Emoji.Image.Thumbnails)
+			thumbUrl := ""
+			if thumbCount > 0 {
+				thumbUrl = run.Emoji.Image.Thumbnails[0].Url
+			}
+			slog.Info("emoji run debug", "emojiId", run.Emoji.EmojiId, "thumbCount", thumbCount, "thumbUrl", thumbUrl)
+			if thumbCount > 0 {
 				// Custom YouTube emote with an image — render as emote
 				emojiText := " "
-				url := run.Emoji.Image.Thumbnails[0].Url
-				emoteId := url 
+				emoteId := thumbUrl
 				pos := fmt.Sprintf("%d-%d", currentIndex, currentIndex+len(emojiText)-1)
 				emotes[emoteId] = append(emotes[emoteId], pos)
 				messageStr += emojiText
