@@ -123,19 +123,25 @@ type LiveChatRenderer struct {
 }
 
 type Run struct {
-	Text  string `json:"text,omitempty"`
-	Emoji *struct {
-		EmojiId   string `json:"emojiId"`
-		Image     struct {
-			Thumbnails    []Thumbnail `json:"thumbnails"`
-			Accessibility *struct {
-				AccessibilityData struct {
-					Label string `json:"label"`
-				} `json:"accessibilityData"`
-			} `json:"accessibility,omitempty"`
-		} `json:"image"`
-		Shortcuts []string `json:"shortcuts,omitempty"`
-	} `json:"emoji,omitempty"`
+	Text  string    `json:"text,omitempty"`
+	Emoji *EmojiRun `json:"emoji,omitempty"`
+}
+
+type EmojiRun struct {
+	EmojiId   string     `json:"emojiId"`
+	Image     EmojiImage `json:"image"`
+	Shortcuts []string   `json:"shortcuts,omitempty"`
+}
+
+type EmojiImage struct {
+	Thumbnails    []Thumbnail        `json:"thumbnails"`
+	Accessibility *EmojiAccessibility `json:"accessibility,omitempty"`
+}
+
+type EmojiAccessibility struct {
+	AccessibilityData struct {
+		Label string `json:"label"`
+	} `json:"accessibilityData"`
 }
 
 type Thumbnail struct {
