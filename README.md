@@ -34,15 +34,27 @@ Written in Go 1.22+. Ensure you have the Go toolchain installed.
    ws://localhost:8092/ws?target=your_youtube_handle
    ```
 
-## Cloud Run Deployment
+## Production Deployment (VPS)
 
-The proxy is containerized and built to be deployed on Google Cloud Run. It requires no persistent volume or database. 
+The proxy runs on a VPS at `ytchat.wildcat.chat` using Docker Compose with Caddy for automatic HTTPS. A VPS is used instead of Cloud Run because YouTube blocks InnerTube API requests from major cloud provider datacenter IPs.
 
-1. Ensure you have the `gcloud` CLI installed and authorized for the `chat-themer` project.
-2. Run the deployment script:
+1. **Automatic deploys**: Pushing to `main` triggers the GitHub Actions workflow, which SSHes into the VPS and redeploys.
+
+2. **Manual deploy** (from the VPS):
    ```bash
-   ./deploy.sh
+   cd /opt/yt-chat-proxy
+   git pull origin main
+   docker compose -f docker-compose.prod.yml build --no-cache
+   docker compose -f docker-compose.prod.yml up -d
    ```
-   This will run `gcloud builds submit` using the multi-stage `Dockerfile`, build an optimized Alpine image, and deploy it to `us-central1`. 
-   
-*Note: Make sure to check the output of the script for the live `wss://` URI.*
+
+3. **View logs**:
+   ```bash
+   docker compose -f docker-compose.prod.yml logs -f proxy
+   ```
+
+4. **Health check**:
+   ```
+   https://ytchat.wildcat.chat/health
+   ```
+
