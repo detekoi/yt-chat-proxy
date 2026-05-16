@@ -7,9 +7,62 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/detekoi/yt-chat-proxy/internal/hub"
 )
+
+// isUnicodeEmoji checks whether an emojiId string is a native unicode emoji
+// rather than a YouTube custom emote identifier. YouTube sends all emoji
+// (including standard unicode) with image thumbnails, so we need to
+// distinguish them. Unicode emoji start with runes in emoji-related blocks;
+// custom emote IDs are typically alphanumeric identifiers or URLs.
+func isUnicodeEmoji(emojiId string) bool {
+	if emojiId == "" {
+		return false
+	}
+	firstRune := []rune(emojiId)[0]
+	// Standard emoji ranges: Emoticons, Dingbats, Misc Symbols, Transport,
+	// Supplemental Symbols, Flags, Symbols & Pictographs, etc.
+	return firstRune >= 0x1F000 || // Supplemental area (most emoji)
+		unicode.Is(unicode.So, firstRune) || // Symbol, other (©, ®, ☀, ☎, etc.)
+		(firstRune >= 0x2600 && firstRune <= 0x27BF) || // Misc symbols + Dingbats
+		(firstRune >= 0x2300 && firstRune <= 0x23FF) || // Misc Technical (⌚, ⏰)
+		(firstRune >= 0x200D && firstRune <= 0x200D) || // ZWJ
+		(firstRune >= 0xFE00 && firstRune <= 0xFE0F) || // Variation selectors
+		(firstRune >= 0x2702 && firstRune <= 0x27B0) || // Dingbats
+		(firstRune >= 0x3030 && firstRune <= 0x303D) || // CJK symbols used as emoji
+		(firstRune >= 0x2B50 && firstRune <= 0x2B55) // Stars, circles
+}
+
+// getEmoteLabel extracts a human-readable label for a YouTube custom emote.
+// Priority: accessibility label > first shortcut (colons stripped) > emojiId.
+func getEmoteLabel(emoji *struct {
+	EmojiId   string `json:"emojiId"`
+	Image     struct {
+		Thumbnails    []Thumbnail `json:"thumbnails"`
+		Accessibility *struct {
+			AccessibilityData struct {
+				Label string `json:"label"`
+			} `json:"accessibilityData"`
+		} `json:"accessibility,omitempty"`
+	} `json:"image"`
+	Shortcuts []string `json:"shortcuts,omitempty"`
+}) string {
+	// Prefer accessibility label (most descriptive)
+	if emoji.Image.Accessibility != nil {
+		label := emoji.Image.Accessibility.AccessibilityData.Label
+		if label != "" {
+			return label
+		}
+	}
+	// Fall back to first shortcut with colons stripped
+	if len(emoji.Shortcuts) > 0 {
+		return strings.Trim(emoji.Shortcuts[0], ":")
+	}
+	// Last resort
+	return emoji.EmojiId
+}
 
 type PollerManager struct {
 	mu      sync.Mutex
@@ -185,27 +238,69 @@ func (m *PollerManager) normalizeAction(action *AddChatItemAction) map[string]an
 
 	messageStr := ""
 	emotes := make(map[string][]string)
-	
+	var emoteFragments []map[string]any
+	hasCustomEmotes := false
+	// Track pending text for emoteFragments assembly
+	pendingText := ""
+
 	currentIndex := 0
 	for _, run := range r.Message.Runs {
 		if run.Text != "" {
 			messageStr += run.Text
-			currentIndex += len(run.Text) // simple length approximation
+			pendingText += run.Text
+			currentIndex += len(run.Text)
 		} else if run.Emoji != nil {
-			if len(run.Emoji.Image.Thumbnails) > 0 {
-				// YouTube emote with an image — render as emote
+			if isUnicodeEmoji(run.Emoji.EmojiId) {
+				// Native unicode emoji — insert character directly so
+				// downstream TTS can match it with replaceEmojisWithText()
+				messageStr += run.Emoji.EmojiId
+				pendingText += run.Emoji.EmojiId
+				currentIndex += len(run.Emoji.EmojiId)
+			} else if len(run.Emoji.Image.Thumbnails) > 0 {
+				// YouTube custom emote with an image — render as emote
+				hasCustomEmotes = true
 				emojiText := " "
 				emoteId := run.Emoji.Image.Thumbnails[0].Url
 				pos := fmt.Sprintf("%d-%d", currentIndex, currentIndex+len(emojiText)-1)
 				emotes[emoteId] = append(emotes[emoteId], pos)
 				messageStr += emojiText
 				currentIndex += len(emojiText)
+
+				// Flush pending text as a text fragment
+				if pendingText != "" {
+					emoteFragments = append(emoteFragments, map[string]any{
+						"type": "text",
+						"text": pendingText,
+					})
+					pendingText = ""
+				}
+
+				label := getEmoteLabel(run.Emoji)
+				shortcutText := ""
+				if len(run.Emoji.Shortcuts) > 0 {
+					shortcutText = run.Emoji.Shortcuts[0]
+				}
+				emoteFragments = append(emoteFragments, map[string]any{
+					"type":     "yt_emote",
+					"text":     shortcutText,
+					"imageUrl": emoteId,
+					"label":    label,
+				})
 			} else if run.Emoji.EmojiId != "" {
-				// Native unicode emoji (no image) — insert as plain text
+				// Fallback: emoji with no image and no unicode — insert ID as text
 				messageStr += run.Emoji.EmojiId
+				pendingText += run.Emoji.EmojiId
 				currentIndex += len(run.Emoji.EmojiId)
 			}
 		}
+	}
+
+	// Flush any remaining text
+	if hasCustomEmotes && pendingText != "" {
+		emoteFragments = append(emoteFragments, map[string]any{
+			"type": "text",
+			"text": pendingText,
+		})
 	}
 
     tags := map[string]any{}
@@ -250,7 +345,7 @@ func (m *PollerManager) normalizeAction(action *AddChatItemAction) map[string]an
         color2 = fmt.Sprintf("rgba(%d,%d,%d,%.2f)", (c>>16)&0xFF, (c>>8)&0xFF, c&0xFF, float64((c>>24)&0xFF)/255.0)
     }
 
-	return map[string]any{
+	result := map[string]any{
 		"type":        "message",
 		"eventType":   eventType,
 		"username":    r.AuthorName.SimpleText,
@@ -264,4 +359,11 @@ func (m *PollerManager) normalizeAction(action *AddChatItemAction) map[string]an
         "bodyColor":   color1,
         "headerColor": color2,
 	}
+
+	// Only include emoteFragments when custom emotes are present
+	if hasCustomEmotes && len(emoteFragments) > 0 {
+		result["emoteFragments"] = emoteFragments
+	}
+
+	return result
 }

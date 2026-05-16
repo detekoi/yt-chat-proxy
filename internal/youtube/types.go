@@ -125,10 +125,16 @@ type LiveChatRenderer struct {
 type Run struct {
 	Text  string `json:"text,omitempty"`
 	Emoji *struct {
-		EmojiId string `json:"emojiId"`
-		Image   struct {
-			Thumbnails []Thumbnail `json:"thumbnails"`
+		EmojiId   string `json:"emojiId"`
+		Image     struct {
+			Thumbnails    []Thumbnail `json:"thumbnails"`
+			Accessibility *struct {
+				AccessibilityData struct {
+					Label string `json:"label"`
+				} `json:"accessibilityData"`
+			} `json:"accessibility,omitempty"`
 		} `json:"image"`
+		Shortcuts []string `json:"shortcuts,omitempty"`
 	} `json:"emoji,omitempty"`
 }
 
