@@ -2,6 +2,7 @@ package hub
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,6 +14,12 @@ type Hub struct {
 	startPoller  func(target string)
 	stopPoller   func(target string)
 	graceTimers  map[string]*time.Timer // grace period before stopping poller
+}
+
+// normalizeTarget strips a leading '@' and lowercases the target so that
+// "@Parfaitfair", "@parfaitfair", and "parfaitfair" all map to the same poller.
+func normalizeTarget(target string) string {
+	return strings.ToLower(strings.TrimPrefix(target, "@"))
 }
 
 func New(startFn, stopFn func(string)) *Hub {
@@ -67,6 +74,7 @@ func (h *Hub) RemoveClient(c *Client) {
 }
 
 func (h *Hub) Subscribe(c *Client, target string) {
+	target = normalizeTarget(target)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -90,6 +98,7 @@ func (h *Hub) Subscribe(c *Client, target string) {
 }
 
 func (h *Hub) Broadcast(target string, message any) {
+	target = normalizeTarget(target)
 	h.mu.RLock()
 	clients := h.subsRegistry[target]
 	var active []*Client
