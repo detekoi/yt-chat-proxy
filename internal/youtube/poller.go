@@ -135,6 +135,9 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 		"message": "Connected to YouTube stream.",
 	})
 
+	const maxConsecutiveErrors = 10
+	consecutiveErrors := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -145,10 +148,21 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 
 		resp, err := m.client.GetLiveChat(ctx, apiKey, continuation)
 		if err != nil {
-			slog.Error("get live chat err", "target", target, "err", err)
+			consecutiveErrors++
+			slog.Error("get live chat err", "target", target, "err", err, "consecutiveErrors", consecutiveErrors)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				slog.Error("too many consecutive poll errors, stopping poller", "target", target, "consecutiveErrors", consecutiveErrors)
+				m.hub.Broadcast(target, map[string]any{
+					"type":    "system",
+					"message": "Lost connection to YouTube stream. Reconnecting...",
+				})
+				m.StopPoller(target)
+				return
+			}
 			time.Sleep(5 * time.Second)
 			continue
 		}
+		consecutiveErrors = 0 // Reset on success
 
 		actions := resp.ContinuationContents.LiveChatContinuation.Actions
 		for _, action := range actions {
