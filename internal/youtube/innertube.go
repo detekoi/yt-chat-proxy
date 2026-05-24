@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -30,7 +31,37 @@ func NewClient() *InnerTubeClient {
 }
 
 // buildLiveURL constructs the YouTube live page URL for a given target.
+// It also handles full YouTube URLs passed as targets, extracting the
+// video ID or handle before constructing the resolve URL.
 func buildLiveURL(target string) string {
+	// Defense-in-depth: if target is a full URL, extract the meaningful part
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		if u, err := url.Parse(target); err == nil {
+			host := u.Hostname()
+			if host == "youtube.com" || host == "www.youtube.com" || host == "youtu.be" || strings.HasSuffix(host, ".youtube.com") {
+				// /watch?v=VIDEO_ID
+				if v := u.Query().Get("v"); v != "" {
+					target = v
+				} else if host == "youtu.be" {
+					// youtu.be/VIDEO_ID
+					target = strings.TrimPrefix(u.Path, "/")
+				} else if strings.HasPrefix(u.Path, "/live/") {
+					// /live/VIDEO_ID
+					parts := strings.Split(u.Path, "/")
+					if len(parts) >= 3 && parts[2] != "" {
+						target = parts[2]
+					}
+				} else if strings.HasPrefix(u.Path, "/@") {
+					// /@handle or /@handle/live
+					parts := strings.Split(u.Path, "/")
+					if len(parts) >= 2 {
+						target = parts[1] // @handle
+					}
+				}
+			}
+		}
+	}
+
 	if strings.HasPrefix(target, "@") || strings.HasPrefix(target, "UC") {
 		return "https://www.youtube.com/" + target + "/live"
 	}

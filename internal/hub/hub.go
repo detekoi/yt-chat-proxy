@@ -16,10 +16,26 @@ type Hub struct {
 	graceTimers  map[string]*time.Timer // grace period before stopping poller
 }
 
-// normalizeTarget strips a leading '@' and lowercases the target so that
+// normalizeTarget strips a leading '@' and lowercases channel handles so that
 // "@Parfaitfair", "@parfaitfair", and "parfaitfair" all map to the same poller.
+// Video IDs (typically 11 chars, mixed case with digits/hyphens/underscores) are
+// preserved as-is because they are case-sensitive.
 func normalizeTarget(target string) string {
-	return strings.ToLower(strings.TrimPrefix(target, "@"))
+	t := strings.TrimPrefix(target, "@")
+	// If the target looks like a channel handle (all letters), lowercase it.
+	// Video IDs contain digits, hyphens, or underscores and must keep their case.
+	isHandle := true
+	for _, r := range t {
+		if r < 'A' || (r > 'Z' && r < 'a') || r > 'z' {
+			// Contains a non-letter character → likely a video ID
+			isHandle = false
+			break
+		}
+	}
+	if isHandle {
+		return strings.ToLower(t)
+	}
+	return t
 }
 
 func New(startFn, stopFn func(string)) *Hub {
