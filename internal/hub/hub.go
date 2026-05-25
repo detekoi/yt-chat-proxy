@@ -103,13 +103,12 @@ func (h *Hub) Subscribe(c *Client, target string) {
 
 	if h.subsRegistry[target] == nil {
 		h.subsRegistry[target] = make(map[*Client]bool)
-		h.subsRegistry[target][c] = true
-		slog.Info("first client for target, starting poller", "target", target)
-		if h.startPoller != nil {
-			h.startPoller(target)
-		}
-	} else {
-		h.subsRegistry[target][c] = true
+		slog.Info("first client for target", "target", target)
+	}
+	h.subsRegistry[target][c] = true
+
+	if h.startPoller != nil {
+		h.startPoller(target)
 	}
 }
 
