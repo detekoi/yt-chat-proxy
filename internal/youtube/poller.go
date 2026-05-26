@@ -84,16 +84,35 @@ func (m *PollerManager) StopPoller(target string) {
 }
 
 func (m *PollerManager) runPoller(ctx context.Context, target string) {
+	for {
+		state := m.resolveTargetWithRetries(ctx, target)
+		if state == nil {
+			return // gave up, error message sent, or context cancelled
+		}
+
+		shouldReResolve := m.pollStream(ctx, target, state)
+		if !shouldReResolve {
+			return // context cancelled
+		}
+
+		slog.Info("poller loop cycle completed, re-resolving target for possible new stream", "target", target)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(15 * time.Second):
+		}
+	}
+}
+
+func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target string) *InitialState {
 	const maxResolveRetries = 40      // 40 * 15s = 10 minutes of retrying
 	const resolveRetryInterval = 15 * time.Second
 
-	var state *InitialState
 	for attempt := 0; attempt <= maxResolveRetries; attempt++ {
 		slog.Info("poller resolving target", "target", target, "attempt", attempt)
-		var err error
-		state, err = m.client.ResolveTarget(ctx, target)
+		state, err := m.client.ResolveTarget(ctx, target)
 		if err == nil {
-			break // Success
+			return state
 		}
 
 		slog.Warn("resolving target failed, will retry", "target", target, "err", err, "attempt", attempt)
@@ -114,17 +133,20 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 				"message": "Could not find a live stream. Please check the channel name and try again.",
 			})
 			m.StopPoller(target)
-			return
+			return nil
 		}
 
 		// Wait before retrying, but respect cancellation
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-time.After(resolveRetryInterval):
 		}
 	}
+	return nil
+}
 
+func (m *PollerManager) pollStream(ctx context.Context, target string, state *InitialState) bool {
 	continuation := state.Continuation
 	apiKey := state.APIKey
 	seenIDs := make(map[string]bool) // Deduplicate across poll cycles
@@ -137,12 +159,13 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 
 	const maxConsecutiveErrors = 10
 	consecutiveErrors := 0
+	lastMessageTime := time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("poller stopped", "target", target)
-			return
+			return false
 		default:
 		}
 
@@ -156,8 +179,7 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 					"type":    "system",
 					"message": "Lost connection to YouTube stream. Reconnecting...",
 				})
-				m.StopPoller(target)
-				return
+				return true // re-resolve
 			}
 			time.Sleep(5 * time.Second)
 			continue
@@ -165,6 +187,10 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 		consecutiveErrors = 0 // Reset on success
 
 		actions := resp.ContinuationContents.LiveChatContinuation.Actions
+		if len(actions) > 0 {
+			lastMessageTime = time.Now()
+		}
+
 		for _, action := range actions {
 			if action.AddChatItemAction != nil {
 				jsonMsg := m.normalizeAction(action.AddChatItemAction)
@@ -189,27 +215,47 @@ func (m *PollerManager) runPoller(ctx context.Context, target string) {
 
 		conts := resp.ContinuationContents.LiveChatContinuation.Continuations
 		timeoutMs := 3000
+		hasContinuation := false
+
 		if len(conts) > 0 {
 			if conts[0].TimedContinuationData != nil {
 				continuation = conts[0].TimedContinuationData.Continuation
+				hasContinuation = true
 				if conts[0].TimedContinuationData.TimeoutMs > 0 {
 					timeoutMs = conts[0].TimedContinuationData.TimeoutMs
 				}
 			} else if conts[0].InvalidationContinuationData != nil {
 				continuation = conts[0].InvalidationContinuationData.Continuation
+				hasContinuation = true
 				if conts[0].InvalidationContinuationData.TimeoutMs > 0 {
 					timeoutMs = conts[0].InvalidationContinuationData.TimeoutMs
 				}
 			}
 		}
 
+		if !hasContinuation || continuation == "" {
+			slog.Info("no continuation found, stream ended", "target", target)
+			m.hub.Broadcast(target, map[string]any{
+				"type":    "system",
+				"message": "YouTube stream appears to have ended. Reconnecting...",
+			})
+			return true // re-resolve
+		}
+
+		// Idle detection: if we haven't seen a message for 30 minutes, re-resolve in case the video ID changed or became stale
+		if time.Since(lastMessageTime) > 30*time.Minute {
+			slog.Info("no messages received for 30 minutes, re-resolving", "target", target)
+			return true // re-resolve
+		}
+
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
 		}
 	}
 }
+
 
 func (m *PollerManager) normalizeAction(action *AddChatItemAction) map[string]any {
 	var r *LiveChatRenderer

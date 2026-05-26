@@ -72,7 +72,7 @@ func buildLiveURL(target string) string {
 	return "https://www.youtube.com/watch?v=" + target
 }
 
-const clientVersion = "2.20260206.01.00"
+const clientVersion = "2.20260520.01.00"
 
 func (c *InnerTubeClient) innertubeContext() map[string]any {
 	return map[string]any{
