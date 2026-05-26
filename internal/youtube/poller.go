@@ -84,13 +84,15 @@ func (m *PollerManager) StopPoller(target string) {
 }
 
 func (m *PollerManager) runPoller(ctx context.Context, target string) {
+	seenIDs := make(map[string]bool) // Persists across re-resolution cycles to avoid replaying old messages
+
 	for {
 		state := m.resolveTargetWithRetries(ctx, target)
 		if state == nil {
 			return // gave up, error message sent, or context cancelled
 		}
 
-		shouldReResolve := m.pollStream(ctx, target, state)
+		shouldReResolve := m.pollStream(ctx, target, state, seenIDs)
 		if !shouldReResolve {
 			return // context cancelled
 		}
@@ -146,10 +148,9 @@ func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target str
 	return nil
 }
 
-func (m *PollerManager) pollStream(ctx context.Context, target string, state *InitialState) bool {
+func (m *PollerManager) pollStream(ctx context.Context, target string, state *InitialState, seenIDs map[string]bool) bool {
 	continuation := state.Continuation
 	apiKey := state.APIKey
-	seenIDs := make(map[string]bool) // Deduplicate across poll cycles
 
 	m.hub.Broadcast(target, map[string]any{
 		"type":    "system",
