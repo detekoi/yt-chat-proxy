@@ -44,16 +44,22 @@ func getEmoteLabel(emoji *EmojiRun) string {
 	return emoji.EmojiId
 }
 
+type pollerEntry struct {
+	cancel context.CancelFunc
+	id     uint64
+}
+
 type PollerManager struct {
 	mu      sync.Mutex
-	pollers map[string]context.CancelFunc
+	pollers map[string]*pollerEntry
+	nextID  uint64
 	client  *InnerTubeClient
 	hub     *hub.Hub
 }
 
 func NewPollerManager(h *hub.Hub) *PollerManager {
 	return &PollerManager{
-		pollers: make(map[string]context.CancelFunc),
+		pollers: make(map[string]*pollerEntry),
 		client:  NewClient(),
 		hub:     h,
 	}
@@ -67,23 +73,44 @@ func (m *PollerManager) StartPoller(target string) {
 		return
 	}
 
+	m.nextID++
+	id := m.nextID
 	ctx, cancel := context.WithCancel(context.Background())
-	m.pollers[target] = cancel
+	m.pollers[target] = &pollerEntry{cancel: cancel, id: id}
 
-	go m.runPoller(ctx, target)
+	go m.runPoller(ctx, target, id)
 }
 
 func (m *PollerManager) StopPoller(target string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if cancel, exists := m.pollers[target]; exists {
-		cancel()
+	if entry, exists := m.pollers[target]; exists {
+		entry.cancel()
 		delete(m.pollers, target)
 	}
 }
 
-func (m *PollerManager) runPoller(ctx context.Context, target string) {
+func (m *PollerManager) runPoller(ctx context.Context, target string, pollerID uint64) {
+	// When this goroutine exits for any reason, clean up our entry
+	// (if we're still the active poller) and restart if subscribers remain.
+	defer func() {
+		m.mu.Lock()
+		entry, exists := m.pollers[target]
+		// Only delete if the entry is still ours — a replacement poller
+		// may have taken our slot if StopPoller + StartPoller raced.
+		if exists && entry.id == pollerID {
+			delete(m.pollers, target)
+		}
+		m.mu.Unlock()
+
+		// If subscribers are still waiting, spawn a fresh poller.
+		if m.hub.HasSubscribers(target) {
+			slog.Info("poller exited but subscribers remain, restarting", "target", target)
+			m.StartPoller(target)
+		}
+	}()
+
 	seenIDs := make(map[string]bool) // Persists across re-resolution cycles to avoid replaying old messages
 
 	for {
@@ -127,14 +154,15 @@ func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target str
 			})
 		}
 
-		// If we've exhausted retries, give up
+		// If we've exhausted retries, give up.
+		// Don't call StopPoller here — let runPoller's defer handle cleanup
+		// and auto-restart if subscribers are still present.
 		if attempt == maxResolveRetries {
 			slog.Error("giving up resolving target after max retries", "target", target)
 			m.hub.Broadcast(target, map[string]any{
 				"type":    "system",
 				"message": "Could not find a live stream. Please check the channel name and try again.",
 			})
-			m.StopPoller(target)
 			return nil
 		}
 
@@ -182,7 +210,11 @@ func (m *PollerManager) pollStream(ctx context.Context, target string, state *In
 				})
 				return true // re-resolve
 			}
-			time.Sleep(5 * time.Second)
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 		consecutiveErrors = 0 // Reset on success

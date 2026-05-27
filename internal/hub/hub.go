@@ -126,3 +126,12 @@ func (h *Hub) Broadcast(target string, message any) {
 		c.Send(message)
 	}
 }
+
+// HasSubscribers reports whether any clients are subscribed to the given target.
+// Used by PollerManager to decide whether to restart a poller after it exits.
+func (h *Hub) HasSubscribers(target string) bool {
+	target = normalizeTarget(target)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.subsRegistry[target]) > 0
+}
