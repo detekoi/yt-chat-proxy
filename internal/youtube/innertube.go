@@ -25,8 +25,12 @@ type InnerTubeClient struct {
 }
 
 func NewClient() *InnerTubeClient {
+	return NewClientWithHTTPClient(&http.Client{Timeout: 15 * time.Second})
+}
+
+func NewClientWithHTTPClient(client *http.Client) *InnerTubeClient {
 	return &InnerTubeClient{
-		client: &http.Client{Timeout: 15 * time.Second},
+		client: client,
 	}
 }
 

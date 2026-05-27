@@ -58,9 +58,13 @@ type PollerManager struct {
 }
 
 func NewPollerManager(h *hub.Hub) *PollerManager {
+	return NewPollerManagerWithClient(h, NewClient())
+}
+
+func NewPollerManagerWithClient(h *hub.Hub, client *InnerTubeClient) *PollerManager {
 	return &PollerManager{
 		pollers: make(map[string]*pollerEntry),
-		client:  NewClient(),
+		client:  client,
 		hub:     h,
 	}
 }

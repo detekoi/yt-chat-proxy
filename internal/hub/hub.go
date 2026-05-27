@@ -14,6 +14,7 @@ type Hub struct {
 	startPoller  func(target string)
 	stopPoller   func(target string)
 	graceTimers  map[string]*time.Timer // grace period before stopping poller
+	GracePeriod  time.Duration
 }
 
 // normalizeTarget strips a leading '@' and lowercases channel handles so that
@@ -45,6 +46,7 @@ func New(startFn, stopFn func(string)) *Hub {
 		startPoller:  startFn,
 		stopPoller:   stopFn,
 		graceTimers:  make(map[string]*time.Timer),
+		GracePeriod:  30 * time.Second,
 	}
 }
 
@@ -64,10 +66,14 @@ func (h *Hub) RemoveClient(c *Client) {
 			delete(clients, c)
 			if len(clients) == 0 {
 				delete(h.subsRegistry, target)
-				slog.Info("no more clients for target, starting 30s grace period", "target", target)
+				gp := h.GracePeriod
+				if gp == 0 {
+					gp = 30 * time.Second
+				}
+				slog.Info("no more clients for target, starting grace period", "target", target, "duration", gp)
 
 				// Start a grace timer instead of stopping immediately
-				t := time.AfterFunc(30*time.Second, func() {
+				t := time.AfterFunc(gp, func() {
 					h.mu.Lock()
 					defer h.mu.Unlock()
 
