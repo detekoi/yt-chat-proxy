@@ -134,10 +134,9 @@ func (m *PollerManager) runPoller(ctx context.Context, target string, pollerID u
 }
 
 func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target string) *InitialState {
-	const maxResolveRetries = 40      // 40 * 15s = 10 minutes of retrying
 	const resolveRetryInterval = 15 * time.Second
 
-	for attempt := 0; attempt <= maxResolveRetries; attempt++ {
+	for attempt := 0; ; attempt++ {
 		slog.Info("poller resolving target", "target", target, "attempt", attempt)
 		state, err := m.client.ResolveTarget(ctx, target)
 		if err == nil {
@@ -152,18 +151,11 @@ func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target str
 				"type":    "system",
 				"message": "Waiting for YouTube stream to go live...",
 			})
-		}
-
-		// If we've exhausted retries, give up.
-		// Don't call StopPoller here — let runPoller's defer handle cleanup
-		// and auto-restart if subscribers are still present.
-		if attempt == maxResolveRetries {
-			slog.Error("giving up resolving target after max retries", "target", target)
+		} else if attempt%40 == 0 {
 			m.hub.Broadcast(target, map[string]any{
 				"type":    "system",
-				"message": "Could not find a live stream. Please check the channel name and try again.",
+				"message": "Still looking for a live stream, will keep retrying...",
 			})
-			return nil
 		}
 
 		// Wait before retrying, but respect cancellation
@@ -173,7 +165,6 @@ func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target str
 		case <-time.After(resolveRetryInterval):
 		}
 	}
-	return nil
 }
 
 func (m *PollerManager) pollStream(ctx context.Context, target string, state *InitialState, seenIDs map[string]bool) bool {
