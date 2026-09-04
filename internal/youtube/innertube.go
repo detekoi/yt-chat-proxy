@@ -193,14 +193,27 @@ func (c *InnerTubeClient) findLiveVideoFromBrowse(ctx context.Context, browseId,
 	// Search through tabs for a video with a LIVE overlay
 	for _, tab := range browseResp.Contents.TwoColumnBrowseResultsRenderer.Tabs {
 		for _, item := range tab.TabRenderer.Content.RichGridRenderer.Contents {
+			// Legacy layout: videoRenderer with a thumbnailOverlayTimeStatusRenderer LIVE overlay.
 			vr := item.RichItemRenderer.Content.VideoRenderer
-			if vr.VideoId == "" {
-				continue
+			if vr.VideoId != "" {
+				for _, overlay := range vr.ThumbnailOverlays {
+					if overlay.ThumbnailOverlayTimeStatusRenderer.Style == "LIVE" {
+						slog.Info("found live video via browse", "videoId", vr.VideoId, "layout", "videoRenderer")
+						return vr.VideoId, nil
+					}
+				}
 			}
-			for _, overlay := range vr.ThumbnailOverlays {
-				if overlay.ThumbnailOverlayTimeStatusRenderer.Style == "LIVE" {
-					slog.Info("found live video via browse", "videoId", vr.VideoId)
-					return vr.VideoId, nil
+
+			// Current layout: lockupViewModel with a thumbnailBadgeViewModel LIVE badge.
+			lv := item.RichItemRenderer.Content.LockupViewModel
+			if lv.ContentId != "" && (lv.ContentType == "" || lv.ContentType == "LOCKUP_CONTENT_TYPE_VIDEO") {
+				for _, overlay := range lv.ContentImage.ThumbnailViewModel.Overlays {
+					for _, badge := range overlay.ThumbnailBottomOverlayViewModel.Badges {
+						if badge.ThumbnailBadgeViewModel.BadgeStyle == "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE" {
+							slog.Info("found live video via browse", "videoId", lv.ContentId, "layout", "lockupViewModel")
+							return lv.ContentId, nil
+						}
+					}
 				}
 			}
 		}

@@ -197,6 +197,143 @@ func TestResolveTarget_BrowseEndpoint(t *testing.T) {
 	}
 }
 
+// Since mid-2026 the channel Live tab renders items as lockupViewModel rather than
+// videoRenderer. Shape mirrors a real browse response for a live channel: the first
+// item is a finished stream (DEFAULT badge), the second is live.
+func TestResolveTarget_BrowseEndpoint_LockupViewModel(t *testing.T) {
+	httpClient := &http.Client{
+		Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+			path := req.URL.Path
+			var body string
+
+			if strings.Contains(path, "resolve_url") {
+				body = `{
+					"endpoint": {
+						"browseEndpoint": {
+							"browseId": "UCcKYdPfHP65sUc632CHYC3w",
+							"params": "EgRsaXZluAEAkgMA8gYECgJ6AA%3D%3D"
+						}
+					}
+				}`
+			} else if strings.Contains(path, "browse") {
+				body = `{
+					"contents": {
+						"twoColumnBrowseResultsRenderer": {
+							"tabs": [
+								{ "tabRenderer": { "title": "Videos" } },
+								{
+									"tabRenderer": {
+										"title": "Live",
+										"selected": true,
+										"content": {
+											"richGridRenderer": {
+												"contents": [
+													{
+														"richItemRenderer": {
+															"content": {
+																"lockupViewModel": {
+																	"contentId": "GSJ9PekrNGU",
+																	"contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+																	"contentImage": {
+																		"thumbnailViewModel": {
+																			"overlays": [
+																				{
+																					"thumbnailBottomOverlayViewModel": {
+																						"badges": [
+																							{ "thumbnailBadgeViewModel": { "text": "4:31:50", "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT" } }
+																						]
+																					}
+																				},
+																				{ "animatedThumbnailOverlayViewModel": {} }
+																			]
+																		}
+																	}
+																}
+															}
+														}
+													},
+													{
+														"richItemRenderer": {
+															"content": {
+																"lockupViewModel": {
+																	"contentId": "hJJMWN4H9qQ",
+																	"contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+																	"contentImage": {
+																		"thumbnailViewModel": {
+																			"overlays": [
+																				{
+																					"thumbnailBottomOverlayViewModel": {
+																						"badges": [
+																							{ "thumbnailBadgeViewModel": { "text": "LIVE", "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE" } }
+																						]
+																					}
+																				}
+																			]
+																		}
+																	}
+																}
+															}
+														}
+													},
+													{ "continuationItemRenderer": {} }
+												]
+											}
+										}
+									}
+								}
+							]
+						}
+					}
+				}`
+			} else if strings.Contains(path, "next") {
+				if !strings.Contains(readBody(req), "hJJMWN4H9qQ") {
+					t.Errorf("next API called for wrong videoId: %s", readBody(req))
+				}
+				body = `{
+					"contents": {
+						"twoColumnWatchNextResults": {
+							"conversationBar": {
+								"liveChatRenderer": {
+									"continuations": [
+										{ "reloadContinuationData": { "continuation": "lockup-continuation-token" } }
+									]
+								}
+							}
+						}
+					}
+				}`
+			} else {
+				return nil, io.ErrUnexpectedEOF
+			}
+
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	client := NewClientWithHTTPClient(httpClient)
+	state, err := client.ResolveTarget(context.Background(), "@parfaitfair")
+	if err != nil {
+		t.Fatalf("unexpected error resolving target: %v", err)
+	}
+	if state == nil || state.Continuation != "lockup-continuation-token" {
+		t.Fatalf("expected continuation 'lockup-continuation-token', got %+v", state)
+	}
+}
+
+// readBody returns the request body (re-readable afterwards) for assertions in mocks.
+func readBody(req *http.Request) string {
+	if req.Body == nil {
+		return ""
+	}
+	b, _ := io.ReadAll(req.Body)
+	req.Body = io.NopCloser(bytes.NewReader(b))
+	return string(b)
+}
+
 func TestResolveTarget_NotFoundAndNotLive(t *testing.T) {
 	t.Run("NotFound", func(t *testing.T) {
 		httpClient := &http.Client{

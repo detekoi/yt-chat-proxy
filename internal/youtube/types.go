@@ -35,6 +35,27 @@ type browseResponse struct {
 												} `json:"thumbnailOverlayTimeStatusRenderer"`
 											} `json:"thumbnailOverlays"`
 										} `json:"videoRenderer"`
+										// Newer channel pages render grid items as lockupViewModel
+										// instead of videoRenderer; the LIVE marker moves to a
+										// thumbnailBadgeViewModel with badgeStyle THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE.
+										LockupViewModel struct {
+											ContentId    string `json:"contentId"`
+											ContentType  string `json:"contentType"`
+											ContentImage struct {
+												ThumbnailViewModel struct {
+													Overlays []struct {
+														ThumbnailBottomOverlayViewModel struct {
+															Badges []struct {
+																ThumbnailBadgeViewModel struct {
+																	Text       string `json:"text"`
+																	BadgeStyle string `json:"badgeStyle"`
+																} `json:"thumbnailBadgeViewModel"`
+															} `json:"badges"`
+														} `json:"thumbnailBottomOverlayViewModel"`
+													} `json:"overlays"`
+												} `json:"thumbnailViewModel"`
+											} `json:"contentImage"`
+										} `json:"lockupViewModel"`
 									} `json:"content"`
 								} `json:"richItemRenderer"`
 							} `json:"contents"`
