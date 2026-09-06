@@ -33,6 +33,8 @@ func main() {
 	pm = youtube.NewPollerManager(h)
 
 	srv := server.New(h)
+	srv.SetPollerStatusFunc(func() any { return pm.Snapshot() })
+	srv.SetStreamingFunc(func(target string) bool { return pm.IsPolling(hub.NormalizeTarget(target)) })
 
 	port := os.Getenv("PORT")
 	if port == "" {

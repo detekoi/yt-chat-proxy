@@ -21,6 +21,10 @@ type Hub struct {
 // "@Parfaitfair", "@parfaitfair", and "parfaitfair" all map to the same poller.
 // Video IDs (typically 11 chars, mixed case with digits/hyphens/underscores) are
 // preserved as-is because they are case-sensitive.
+// NormalizeTarget is the exported form of normalizeTarget for callers that need
+// to look up poller state by the same key the hub uses.
+func NormalizeTarget(target string) string { return normalizeTarget(target) }
+
 func normalizeTarget(target string) string {
 	t := strings.TrimPrefix(target, "@")
 	// If the target looks like a channel handle (all letters), lowercase it.
@@ -131,6 +135,17 @@ func (h *Hub) Broadcast(target string, message any) {
 	for _, c := range active {
 		c.Send(message)
 	}
+}
+
+// SubscriberCounts returns the number of connected clients per target.
+func (h *Hub) SubscriberCounts() map[string]int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make(map[string]int, len(h.subsRegistry))
+	for target, clients := range h.subsRegistry {
+		out[target] = len(clients)
+	}
+	return out
 }
 
 // HasSubscribers reports whether any clients are subscribed to the given target.

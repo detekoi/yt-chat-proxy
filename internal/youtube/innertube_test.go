@@ -3,6 +3,7 @@ package youtube
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -321,6 +322,49 @@ func TestResolveTarget_BrowseEndpoint_LockupViewModel(t *testing.T) {
 	}
 	if state == nil || state.Continuation != "lockup-continuation-token" {
 		t.Fatalf("expected continuation 'lockup-continuation-token', got %+v", state)
+	}
+}
+
+// A video that has already ended still returns a liveChatRenderer from the next API,
+// flagged isReplay. Polling that continuation yields HTTP 400 forever, so ResolveTarget
+// must report ErrNotLive and let the poller keep looking for a real live video.
+func TestResolveTarget_ReplayChatIsNotLive(t *testing.T) {
+	httpClient := &http.Client{
+		Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+			path := req.URL.Path
+			var body string
+			if strings.Contains(path, "resolve_url") {
+				body = `{"endpoint": {"watchEndpoint": {"videoId": "hJJMWN4H9qQ"}}}`
+			} else if strings.Contains(path, "next") {
+				body = `{
+					"contents": {
+						"twoColumnWatchNextResults": {
+							"conversationBar": {
+								"liveChatRenderer": {
+									"isReplay": true,
+									"continuations": [
+										{ "reloadContinuationData": { "continuation": "replay-continuation-token" } }
+									]
+								}
+							}
+						}
+					}
+				}`
+			} else {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	client := NewClientWithHTTPClient(httpClient)
+	state, err := client.ResolveTarget(context.Background(), "hJJMWN4H9qQ")
+	if !errors.Is(err, ErrNotLive) {
+		t.Fatalf("expected ErrNotLive for a replay chat, got state=%+v err=%v", state, err)
 	}
 }
 

@@ -252,7 +252,16 @@ func (c *InnerTubeClient) getChatContinuation(ctx context.Context, videoId strin
 		return nil, err
 	}
 
-	conts := nextResp.Contents.TwoColumnWatchNextResults.ConversationBar.LiveChatRenderer.Continuations
+	lcr := nextResp.Contents.TwoColumnWatchNextResults.ConversationBar.LiveChatRenderer
+	if lcr.IsReplay {
+		// The /live URL (and the Live tab) can keep pointing at a just-ended stream.
+		// Its chat is a replay, which get_live_chat rejects with 400, so treat it as not live
+		// and let the caller keep re-resolving until a real live video appears.
+		slog.Warn("video offers a chat replay, not a live chat; treating as not live", "videoId", videoId)
+		return nil, ErrNotLive
+	}
+
+	conts := lcr.Continuations
 	if len(conts) == 0 || conts[0].ReloadContinuationData.Continuation == "" {
 		slog.Error("could not find live chat continuation token in next response", "videoId", videoId)
 		return nil, errors.New("live chat not available on this stream")
@@ -264,6 +273,7 @@ func (c *InnerTubeClient) getChatContinuation(ctx context.Context, videoId strin
 	return &InitialState{
 		APIKey:       "",
 		Continuation: continuation,
+		VideoId:      videoId,
 	}, nil
 }
 

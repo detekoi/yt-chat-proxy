@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -14,6 +13,23 @@ import (
 type Server struct {
 	router *http.ServeMux
 	hub    *hub.Hub
+	// pollerStatus, when set, is included in /health so poller health can be
+	// inspected on a deployed instance.
+	pollerStatus func() any
+	// isStreaming, when set, reports whether the poller for a target is already
+	// attached to a live chat, so a late-joining client can be told immediately.
+	isStreaming func(target string) bool
+}
+
+// SetStreamingFunc registers a predicate used to tell late-joining clients that
+// the stream they subscribed to is already connected.
+func (s *Server) SetStreamingFunc(fn func(target string) bool) {
+	s.isStreaming = fn
+}
+
+// SetPollerStatusFunc registers a provider whose result is embedded in /health as "pollers".
+func (s *Server) SetPollerStatusFunc(fn func() any) {
+	s.pollerStatus = fn
 }
 
 func New(h *hub.Hub) *Server {
@@ -46,12 +62,22 @@ func (s *Server) routes() {
 func (s *Server) handleHealth() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"status": "ok", "service": "yt-chat-proxy"}`)
+		body := map[string]any{
+			"status":      "ok",
+			"service":     "yt-chat-proxy",
+			"subscribers": s.hub.SubscriberCounts(),
+		}
+		if s.pollerStatus != nil {
+			body["pollers"] = s.pollerStatus()
+		}
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			slog.Error("health encode error", "err", err)
+		}
 	}
 }
 
 type connectMessage struct {
-	Action string `json:"action"` // "JOIN"
+	Action string `json:"action"` // "JOIN" or "PING"
 	Target string `json:"target"` // video ID or @handle
 }
 
@@ -93,12 +119,28 @@ func (s *Server) handleWS() http.HandlerFunc {
 				if msg.Action == "JOIN" && msg.Target != "" {
 					slog.Info("client requesting JOIN", "target", msg.Target)
 					s.hub.Subscribe(client, msg.Target)
-					// Send ACK
+					// Send ACK. Note this only confirms the subscription; the poller
+					// announces "Connected to YouTube stream." separately once it is
+					// attached to a live chat.
 					client.Send(map[string]any{
 						"type":   "system",
 						"status": "connected",
 						"target": msg.Target,
 					})
+					// A client joining an already-running poller would otherwise never
+					// hear that announcement (it was broadcast before they subscribed).
+					if s.isStreaming != nil && s.isStreaming(msg.Target) {
+						client.Send(map[string]any{
+							"type":    "system",
+							"status":  "connected",
+							"message": "Connected to YouTube stream.",
+						})
+					}
+				} else if msg.Action == "PING" {
+					// Application-level heartbeat. Browser clients cannot observe
+					// WebSocket-level pings, so this reply is what lets the overlay
+					// detect a socket that has silently gone stale.
+					client.Send(map[string]any{"type": "pong"})
 				}
 			}
 		}

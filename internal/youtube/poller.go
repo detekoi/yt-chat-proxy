@@ -47,6 +47,38 @@ func getEmoteLabel(emoji *EmojiRun) string {
 type pollerEntry struct {
 	cancel context.CancelFunc
 	id     uint64
+	state  *pollerState
+}
+
+// PollerStatus is a point-in-time view of one poller, exposed via /health so a
+// stuck poller can be diagnosed on a deployed instance without shell access.
+type PollerStatus struct {
+	Target         string    `json:"target"`
+	Phase          string    `json:"phase"` // "resolving" or "polling"
+	VideoId        string    `json:"videoId,omitempty"`
+	ResolveAttempt int       `json:"resolveAttempt,omitempty"`
+	LastError      string    `json:"lastError,omitempty"`
+	StartedAt      time.Time `json:"startedAt"`
+	LastActivity   time.Time `json:"lastActivity"` // last successful resolve step or poll
+	LastMessage    *time.Time `json:"lastMessage,omitempty"`
+	Messages       uint64    `json:"messages"`
+}
+
+type pollerState struct {
+	mu sync.Mutex
+	PollerStatus
+}
+
+func (s *pollerState) update(fn func(st *PollerStatus)) {
+	s.mu.Lock()
+	fn(&s.PollerStatus)
+	s.mu.Unlock()
+}
+
+func (s *pollerState) snapshot() PollerStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.PollerStatus
 }
 
 type PollerManager struct {
@@ -80,9 +112,39 @@ func (m *PollerManager) StartPoller(target string) {
 	m.nextID++
 	id := m.nextID
 	ctx, cancel := context.WithCancel(context.Background())
-	m.pollers[target] = &pollerEntry{cancel: cancel, id: id}
+	now := time.Now()
+	st := &pollerState{PollerStatus: PollerStatus{Target: target, Phase: "resolving", StartedAt: now, LastActivity: now}}
+	m.pollers[target] = &pollerEntry{cancel: cancel, id: id, state: st}
 
-	go m.runPoller(ctx, target, id)
+	go m.runPoller(ctx, target, id, st)
+}
+
+// IsPolling reports whether a poller for target (already normalized by the hub)
+// is currently attached to a live chat, i.e. past the resolve phase.
+func (m *PollerManager) IsPolling(target string) bool {
+	m.mu.Lock()
+	entry, ok := m.pollers[target]
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	return entry.state.snapshot().Phase == "polling"
+}
+
+// Snapshot returns the current status of every active poller.
+func (m *PollerManager) Snapshot() []PollerStatus {
+	m.mu.Lock()
+	entries := make([]*pollerEntry, 0, len(m.pollers))
+	for _, e := range m.pollers {
+		entries = append(entries, e)
+	}
+	m.mu.Unlock()
+
+	out := make([]PollerStatus, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.state.snapshot())
+	}
+	return out
 }
 
 func (m *PollerManager) StopPoller(target string) {
@@ -95,7 +157,7 @@ func (m *PollerManager) StopPoller(target string) {
 	}
 }
 
-func (m *PollerManager) runPoller(ctx context.Context, target string, pollerID uint64) {
+func (m *PollerManager) runPoller(ctx context.Context, target string, pollerID uint64, st *pollerState) {
 	// When this goroutine exits for any reason, clean up our entry
 	// (if we're still the active poller) and restart if subscribers remain.
 	defer func() {
@@ -118,12 +180,20 @@ func (m *PollerManager) runPoller(ctx context.Context, target string, pollerID u
 	seenIDs := make(map[string]bool) // Persists across re-resolution cycles to avoid replaying old messages
 
 	for {
-		state := m.resolveTargetWithRetries(ctx, target)
+		st.update(func(p *PollerStatus) { p.Phase = "resolving"; p.VideoId = "" })
+		state := m.resolveTargetWithRetries(ctx, target, st)
 		if state == nil {
 			return // gave up, error message sent, or context cancelled
 		}
 
-		shouldReResolve := m.pollStream(ctx, target, state, seenIDs)
+		st.update(func(p *PollerStatus) {
+			p.Phase = "polling"
+			p.VideoId = state.VideoId
+			p.ResolveAttempt = 0
+			p.LastError = ""
+			p.LastActivity = time.Now()
+		})
+		shouldReResolve := m.pollStream(ctx, target, state, seenIDs, st)
 		if !shouldReResolve {
 			return // context cancelled
 		}
@@ -137,7 +207,7 @@ func (m *PollerManager) runPoller(ctx context.Context, target string, pollerID u
 	}
 }
 
-func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target string) *InitialState {
+func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target string, st *pollerState) *InitialState {
 	const resolveRetryInterval = 15 * time.Second
 
 	for attempt := 0; ; attempt++ {
@@ -146,6 +216,7 @@ func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target str
 		if err == nil {
 			return state
 		}
+		st.update(func(p *PollerStatus) { p.ResolveAttempt = attempt + 1; p.LastError = err.Error() })
 
 		slog.Warn("resolving target failed, will retry", "target", target, "err", err, "attempt", attempt)
 
@@ -171,7 +242,7 @@ func (m *PollerManager) resolveTargetWithRetries(ctx context.Context, target str
 	}
 }
 
-func (m *PollerManager) pollStream(ctx context.Context, target string, state *InitialState, seenIDs map[string]bool) bool {
+func (m *PollerManager) pollStream(ctx context.Context, target string, state *InitialState, seenIDs map[string]bool, st *pollerState) bool {
 	continuation := state.Continuation
 	apiKey := state.APIKey
 
@@ -182,6 +253,7 @@ func (m *PollerManager) pollStream(ctx context.Context, target string, state *In
 	})
 
 	const maxConsecutiveErrors = 10
+	const maxPollIntervalMs = 30_000
 	consecutiveErrors := 0
 	lastMessageTime := time.Now()
 
@@ -196,6 +268,7 @@ func (m *PollerManager) pollStream(ctx context.Context, target string, state *In
 		resp, err := m.client.GetLiveChat(ctx, apiKey, continuation)
 		if err != nil {
 			consecutiveErrors++
+			st.update(func(p *PollerStatus) { p.LastError = err.Error() })
 			slog.Error("get live chat err", "target", target, "err", err, "consecutiveErrors", consecutiveErrors)
 			if consecutiveErrors >= maxConsecutiveErrors {
 				slog.Error("too many consecutive poll errors, stopping poller", "target", target, "consecutiveErrors", consecutiveErrors)
@@ -218,6 +291,15 @@ func (m *PollerManager) pollStream(ctx context.Context, target string, state *In
 		if len(actions) > 0 {
 			lastMessageTime = time.Now()
 		}
+		st.update(func(p *PollerStatus) {
+			p.LastActivity = time.Now()
+			p.LastError = ""
+			if len(actions) > 0 {
+				t := lastMessageTime
+				p.LastMessage = &t
+				p.Messages += uint64(len(actions))
+			}
+		})
 
 		for _, action := range actions {
 			if action.AddChatItemAction != nil {
@@ -259,6 +341,13 @@ func (m *PollerManager) pollStream(ctx context.Context, target string, state *In
 					timeoutMs = conts[0].InvalidationContinuationData.TimeoutMs
 				}
 			}
+		}
+
+		// Never trust YouTube for how long to sleep: a huge timeoutMs would park this
+		// poller (and every overlay subscribed to it) with no way to recover.
+		if timeoutMs > maxPollIntervalMs {
+			slog.Warn("clamping oversized poll interval", "target", target, "timeoutMs", timeoutMs)
+			timeoutMs = maxPollIntervalMs
 		}
 
 		if !hasContinuation || continuation == "" {

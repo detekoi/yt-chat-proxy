@@ -3,6 +3,7 @@ package youtube
 type InitialState struct {
 	APIKey       string
 	Continuation string
+	VideoId      string
 }
 
 type resolveUrlResponse struct {
@@ -72,6 +73,9 @@ type nextResponse struct {
 		TwoColumnWatchNextResults struct {
 			ConversationBar struct {
 				LiveChatRenderer struct {
+					// True when the video has ended and YouTube is offering a chat *replay*.
+					// A replay continuation is not pollable via get_live_chat (HTTP 400).
+					IsReplay      bool `json:"isReplay"`
 					Continuations []struct {
 						ReloadContinuationData struct {
 							Continuation string `json:"continuation"`
